@@ -24,9 +24,9 @@ use tokio::{
 
 use crate::{
     app::dispatcher::Dispatcher,
+    app::fake_dns::FakeDns,
     app::nat_manager::NatManager,
     app::nat_manager::UdpPacket,
-    common::fake_dns::FakeDns,
     common::mutex::AtomicMutex,
     session::{Session, SocksAddr},
 };
@@ -54,6 +54,7 @@ unsafe impl Send for NetStackImpl {}
 
 impl NetStackImpl {
     pub fn new(
+        inbound_tag: String,
         dispatcher: Arc<Dispatcher>,
         nat_manager: Arc<NatManager>,
         fakedns: Arc<TokioMutex<FakeDns>>,
@@ -93,6 +94,7 @@ impl NetStackImpl {
             }
         });
 
+        let inbound_tag_1 = inbound_tag.clone();
         let lwip_locktcp = stack.lwip_lock.clone();
         let dispatcher = stack.dispatcher.clone();
         let fakedns = stack.fakedns.clone();
@@ -102,6 +104,7 @@ impl NetStackImpl {
             while let Some(stream) = listener.next().await {
                 let dispatcher = dispatcher.clone();
                 let fakedns = fakedns.clone();
+                let inbound_tag_1 = inbound_tag_1.clone();
 
                 tokio::spawn(async move {
                     let mut sess = if fakedns.lock().await.is_fake_ip(&stream.remote_addr().ip()) {
@@ -112,17 +115,23 @@ impl NetStackImpl {
                         {
                             Some(domain) => Session {
                                 source: stream.local_addr().to_owned(),
+                                local_addr: stream.remote_addr().to_owned(),
                                 destination: SocksAddr::Domain(domain, stream.remote_addr().port()),
+                                inbound_tag: inbound_tag_1.clone(),
                             },
                             None => Session {
                                 source: stream.local_addr().to_owned(),
+                                local_addr: stream.remote_addr().to_owned(),
                                 destination: SocksAddr::Ip(*stream.remote_addr()),
+                                inbound_tag: inbound_tag_1.clone(),
                             },
                         }
                     } else {
                         Session {
                             source: stream.local_addr().to_owned(),
+                            local_addr: stream.remote_addr().to_owned(),
                             destination: SocksAddr::Ip(*stream.remote_addr()),
+                            inbound_tag: inbound_tag_1.clone(),
                         }
                     };
 
@@ -230,7 +239,9 @@ impl NetStackImpl {
                 if !nat_manager.contains_key(&src_addr).await {
                     let sess = Session {
                         source: src_addr,
+                        local_addr: "0.0.0.0:0".parse().unwrap(),
                         destination: SocksAddr::Ip(dst_addr),
+                        inbound_tag: inbound_tag.clone(),
                     };
 
                     if nat_manager
@@ -267,7 +278,7 @@ impl NetStackImpl {
     pub fn output(&mut self, pkt: Vec<u8>) -> io::Result<usize> {
         let n = pkt.len();
         if let Err(err) = self.tx.send(pkt) {
-            debug!("output packet failed: {}", err);
+            trace!("output packet failed: {}", err);
             return Ok(0);
         }
         if let Some(waker) = self.waker.as_ref() {
@@ -309,6 +320,8 @@ impl AsyncRead for NetStackImpl {
 impl AsyncWrite for NetStackImpl {
     fn poll_write(self: Pin<&mut Self>, _cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
         unsafe {
+            let _g = self.lwip_lock.lock();
+
             let pbuf = pbuf_alloc(pbuf_layer_PBUF_RAW, buf.len() as u16_t, pbuf_type_PBUF_RAM);
             if pbuf.is_null() {
                 warn!("alloc null pbuf");
@@ -316,26 +329,23 @@ impl AsyncWrite for NetStackImpl {
             }
             pbuf_take(pbuf, buf.as_ptr() as *const raw::c_void, buf.len() as u16_t);
 
-            {
-                let _g = self.lwip_lock.lock();
-                if let Some(input_fn) = (*netif_list).input {
-                    let err = input_fn(pbuf, netif_list);
-                    if err == err_enum_t_ERR_OK as err_t {
-                        Poll::Ready(Ok(buf.len()))
-                    } else {
-                        pbuf_free(pbuf);
-                        Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::Interrupted,
-                            "input failed",
-                        )))
-                    }
+            if let Some(input_fn) = (*netif_list).input {
+                let err = input_fn(pbuf, netif_list);
+                if err == err_enum_t_ERR_OK as err_t {
+                    Poll::Ready(Ok(buf.len()))
                 } else {
                     pbuf_free(pbuf);
                     Poll::Ready(Err(io::Error::new(
                         io::ErrorKind::Interrupted,
-                        "none input fn",
+                        "input failed",
                     )))
                 }
+            } else {
+                pbuf_free(pbuf);
+                Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "none input fn",
+                )))
             }
         }
     }

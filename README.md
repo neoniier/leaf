@@ -5,13 +5,143 @@
 ### Leaf
 A lightweight and fast proxy utility tries to include any useful features.
 
+### Features
+Inbounds are proxy servers and outbounds are clients.
+
+- HTTP inbound supports CONNECT method
+- SOCKS 5 inbound and outbound with UDP ASSOCIATE support
+- TUN inbound
+- Trojan inbound and outbound
+- Direct outbound sends a proxy request directly to it's destination
+- Drop outbound rejects a proxy request
+- Shadowsocks outbound
+- VMess outbound
+
+- WebSocket inbound and outbound
+- TLS outbound
+- H2 outbound
+
+- Chain inbound and outbound for chaining other inbounds and outbounds
+- Failover outbound tries a proxy request on a group of outbounds one by one
+- Random outbound sends a proxy request to one of the outbounds randomly
+- Tryall outbound tries a proxy request on a group of outbounds simultaneously
+
+- A router routes requests from inbounds to outbounds base on domain or IP rules
+- Full cone NAT
+- TUN-based transport proxy
+- Fake DNS
+- Domain sniffing from TLS traffic enabled by default
+- Load balancing / high availability through failover/random/tryall outbounds
+
+### Getting Started
+A local HTTP server redirects accepted requests to a SOCKS 5 server:
+
+```json
+{
+    "inbounds": [
+        {
+            "address": "127.0.0.1",
+            "port": 1087,
+            "protocol": "http"
+        }
+    ],
+    "log": {
+        "level": "trace"
+    },
+    "outbounds": [
+        {
+            "protocol": "socks",
+            "settings": {
+                "address": "127.0.0.1",
+                "port": 1080
+            }
+        }
+    ]
+}
+```
+
+A SOCKS 5 server sends out accepted requests directly:
+
+```json
+{
+    "inbounds": [
+        {
+            "address": "127.0.0.1",
+            "port": 1080,
+            "protocol": "socks"
+        }
+    ],
+    "log": {
+        "level": "trace"
+    },
+    "outbounds": [
+        {
+            "protocol": "direct"
+        }
+    ]
+}
+```
+
+Tests the setup:
+
+```sh
+https_proxy=127.0.0.1:1087 curl "https://example.org"
+```
+
 ### Usage
-There's a brief introduction written in Chinese you can find [here](https://github.com/eycorsican/leaf/blob/master/README.zh.md).
+You may find some configuration samples [here](https://github.com/eycorsican/leaf/blob/master/README.zh.md), it also serves as a reference for the JSON config format.
+
+### Build
+Install Rust: https://www.rust-lang.org/tools/install
+
+Install nightly toolchain:
+```sh
+rustup default nightly
+```
+
+Install a C compiler, e.g. GCC:
+```sh
+apt update && apt install gcc
+
+# Or clang on macOS
+# brew update && brew install clang
+```
+
+Clone & Build:
+```sh
+git clone https://github.com/eycorsican/leaf.git
+cd leaf
+git submodule init
+git submodule update
+cargo build -p leaf-bin
+```
+
+Run:
+```sh
+./target/debug/leaf -h
+```
+
+### Customizing Build
+You may build leaf with a selected set of features.
+
+By including only the demanded features, you will get an optimized artifact with smaller binary size and lower runtime memory footprint.
+
+For example, this build command,
+```sh
+cargo build --release --manifest-path leaf-bin/Cargo.toml --no-default-features --features "leaf/config-json leaf/inbound-socks leaf/outbound-direct leaf/outbound-shadowsocks leaf/ring-aead"
+```
+will result in an executable supports only the JSON config format, `socks` inbound, `direct` and `shadowsocks` outbounds.
+
+Note that for proxy protocols with AEAD crypto functions, one of the `leaf/ring-aead` and `leaf/openssl-aead` features must be included. Similarly, one of the `leaf/rustls-tls` and `leaf/openssl-tls` must be included for `leaf/outbound-tls` feature.
+
+Refer to `leaf/Cargo.toml` for a full list of available features.
 
 ### iOS
-Open Source Demo: https://github.com/eycorsican/ileaf
+App Store: https://apps.apple.com/us/app/leaf-lightweight-proxy/id1534109007
 
-TestFlight App: https://testflight.apple.com/join/std0FFCS
+TestFlight: https://testflight.apple.com/join/std0FFCS
+
+Demo for Developer: https://github.com/eycorsican/ileaf
 
 ### OpenWrt
 Running as transparent proxy on OpenWrt:
